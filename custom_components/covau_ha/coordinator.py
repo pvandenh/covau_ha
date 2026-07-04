@@ -14,6 +14,7 @@ from .api import (
     CovauClient,
     CovauSessionExpired,
     build_daily_usage_summary,
+    normalize_usage_summary,
 )
 from .const import (
     ACCOUNT_UPDATE_INTERVAL,
@@ -93,7 +94,12 @@ class CovauCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 continue
 
             rate_details = await self.client.get_rate_details(seq_product_item_id)
-            usage_summary = await self.client.get_usage_summary(seq_product_item_id)
+            raw_usage_summary = await self.client.get_usage_summary(seq_product_item_id)
+            # CovaU's usage/customer-summary returns every numeric field as a
+            # string (sometimes "$"-prefixed, sometimes the literal "None"),
+            # so this coerces them into real floats/None before any sensor
+            # touches them - see normalize_usage_summary() for details.
+            usage_summary = normalize_usage_summary(raw_usage_summary)
             daily_readings = await self.client.get_usage_daily(
                 seq_product_item_id, days=DEFAULT_USAGE_DAYS
             )

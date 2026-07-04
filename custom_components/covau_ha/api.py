@@ -18,11 +18,15 @@ Endpoints confirmed with full response shape:
     GET /wp-json/covau/v1/lookup/customer-parent-child
     GET /wp-json/covau/v1/Customer
     GET /wp-json/covau/v1/utility/rate-details?seqProductItemId=<id>
-
-Endpoints seen but NOT yet confirmed (response body wasn't captured in the
-HAR - grab these via DevTools "Copy response" and I'll fill these in):
     GET /wp-json/covau/v1/usage/daily?seqProductItemId=<id>&startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
     GET /wp-json/covau/v1/usage/customer-summary?seqProductItemId=<id>
+
+Endpoints seen in the frontend JS but NOT yet confirmed with a captured
+response body (grab these via DevTools "Copy response" and I'll fill these
+in):
+    POST /wp-json/covau/v1/security/refresh   (refresh-token flow)
+    POST /wp-json/covau/v1/logout
+    POST /wp-json/covau/v1/account/switch     (multi-account switching)
     GET /wp-json/covau/v1/customer/billing
     GET /wp-json/covau/v1/Customer/transactions
 """
@@ -69,8 +73,10 @@ def redact_sensitive(value: Any) -> Any:
 def parse_covau_datetime(value: str) -> Any:
     """Parse a CovaU readDatetime string ("MM/DD/YYYY HH:MM:SS").
 
-    Confirmed month-first from the Usage Details page JS (parseDateTimeMDY),
-    despite CovaU being an AU site - don't swap to day-first.
+    Confirmed month-first both from the Usage Details page JS
+    (parseDateTimeMDY) and from live usage/daily data (e.g.
+    "07/02/2026 00:00:00" for 2 July 2026) - despite CovaU being an AU
+    site, don't swap to day-first.
     """
     from datetime import datetime
 
@@ -86,16 +92,34 @@ def parse_covau_datetime(value: str) -> Any:
 def build_daily_usage_summary(
     readings: list[dict[str, Any]] | None,
 ) -> dict[str, float]:
-    """Sum readValue by category for a set of usage/daily readings.
+    """Sum readValue/netAmount by category for a set of usage/daily readings.
 
     Categories are normalised to lowercase-alnum before matching, mirroring
     the normalizeCategory() function in the Usage Details page JS, so
     "Off-Peak", "OffPeak", "off peak" etc all collapse to the same key.
+
+    Confirmed live response shape (readValue/netAmount arrive as numeric
+    strings, not numbers - float() handles both transparently):
+        [{"seqProductItemId": "398522", "category": "Off Peak",
+          "tooltipText": "Off Peak", "readDatetime": "07/02/2026 00:00:00",
+          "readValue": "28.4310", "netAmount": "4.2647"}, ...]
+
+    A fourth category, "Daily" (the daily supply charge), also appears in
+    live data alongside Peak/Off Peak/Standard FiT. Its readValue is always
+    "0.0000" (it's a flat charge, not a usage quantity) but its netAmount is
+    the real daily supply charge in AUD, so it's tracked here as a cost-only
+    total rather than folded into a usage figure.
     """
     totals: dict[str, float] = {
         "peak": 0.0,
         "off_peak": 0.0,
         "standard_fit": 0.0,
+        "peak_cost": 0.0,
+        "off_peak_cost": 0.0,
+        # Solar export nets a negative netAmount (a credit against the
+        # bill), so this total is naturally negative-or-zero.
+        "standard_fit_credit": 0.0,
+        "supply_charge_cost": 0.0,
     }
     if not isinstance(readings, list):
         # CovaU returns something other than a JSON array when there's no
@@ -110,13 +134,71 @@ def build_daily_usage_summary(
             ch for ch in str(reading.get("category") or "").lower() if ch.isalnum()
         )
         value = float(reading.get("readValue") or 0)
+        cost = float(reading.get("netAmount") or 0)
         if category == "peak":
             totals["peak"] += value
+            totals["peak_cost"] += cost
         elif category == "offpeak":
             totals["off_peak"] += value
+            totals["off_peak_cost"] += cost
         elif category == "standardfit":
             totals["standard_fit"] += value
+            totals["standard_fit_credit"] += cost
+        elif category == "daily":
+            totals["supply_charge_cost"] += cost
     return totals
+
+
+def _parse_covau_amount(value: Any) -> float | None:
+    """Parse a CovaU numeric field that may be a string, "$"-prefixed, or
+    the literal string "None" instead of a real null.
+
+    Confirmed live shapes from usage/customer-summary:
+        "unitsPerDay": "39.16"       (plain numeric string)
+        "currentCost": "$0.00"       ("$"-prefixed numeric string)
+        "lastInvoiceAmount": "None"  (literal string "None", not null,
+                                       seen on an account with no invoice yet)
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() == "none":
+        return None
+    text = text.replace("$", "").replace(",", "").strip()
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def normalize_usage_summary(raw: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Coerce usage/customer-summary's stringified fields into real types.
+
+    CovaU returns every numeric field as a string (sometimes "$"-prefixed,
+    sometimes the literal "None"), so this converts unitsPerDay, costPerDay,
+    lastInvoiceAmount, currentCost, projectedCost, periodDays and
+    currentDays into floats (or None) before sensors read them. Date
+    strings ("02 Jul", no year) and usageMessage/warningMessage are passed
+    through unchanged.
+    """
+    if not isinstance(raw, dict):
+        return raw
+    normalized = dict(raw)
+    for key in (
+        "unitsPerDay",
+        "costPerDay",
+        "lastInvoiceAmount",
+        "currentCost",
+        "projectedCost",
+        "periodDays",
+        "currentDays",
+    ):
+        if key in normalized:
+            normalized[key] = _parse_covau_amount(normalized[key])
+    uom = normalized.get("uomCode")
+    if isinstance(uom, str) and uom.lower() == "kwh":
+        normalized["uomCode"] = "kWh"
+    return normalized
 
 
 class CovauClient:
@@ -259,10 +341,13 @@ class CovauClient:
     ) -> list[dict[str, Any]] | None:
         """Return daily usage readings for a site over the given window.
 
-        Response shape (confirmed via the Usage Details page JS):
-        [{"readDatetime": "07/03/2026 00:00:00", "readValue": 4.812,
-          "category": "Peak"}, ...]
-        categories seen: Peak, OffPeak, StandardFiT.
+        Response shape (confirmed from live data):
+        [{"seqProductItemId": "398522", "category": "Off Peak",
+          "tooltipText": "Off Peak", "readDatetime": "07/02/2026 00:00:00",
+          "readValue": "28.4310", "netAmount": "4.2647"}, ...]
+        categories seen: Daily (supply charge, readValue always "0.0000"),
+        Peak, Off Peak, Standard FiT. readValue/netAmount arrive as numeric
+        strings, not numbers.
         NOTE: readDatetime is MM/DD/YYYY (US month-first order) despite this
         being an AU site - parse accordingly, don't assume DD/MM/YYYY.
         """
@@ -304,16 +389,42 @@ class CovauClient:
     async def get_usage_summary(self, seq_product_item_id: str) -> dict[str, Any] | None:
         """Return the billing-cycle usage/cost summary for a site.
 
-        Response shape (confirmed via the Usage Summary page JS):
+        Response shape (confirmed live):
         {
-          "unitsPerDay": 12.4, "uomCode": "kWh", "costPerDay": 3.85,
-          "lastInvoiceAmount": 142.10, "currentCost": 58.20,
-          "projectedCost": 165.30, "warningMessage": null,
-          "periodDays": 30, "currentDays": 12,
-          "lastInvoiceDate": "...", "nextInvoiceDate": "..."
+          "siteId": "239112", "seqProductItemId": "398522",
+          "unitsPerDay": "39.16", "costPerDay": "4.37",
+          "lastInvoiceAmount": "None", "lastInvoiceDate": "02 Jul",
+          "nextInvoiceDate": "02 Aug", "periodDays": "31", "currentDays": "3",
+          "currentCost": "$0.00", "projectedCost": "$135.47",
+          "uomCode": "KWh",
+          "usageMessage": "You seem to use over 40% of your consumption in
+            the off peak period...", "warningMessage": null
         }
-        lastInvoiceDate/nextInvoiceDate may arrive as "/Date(1751500800000)/"
-        (.NET JSON date format) or a plain date string - handle both.
+
+        IMPORTANT - "unitsPerDay" is misleadingly named: it is actually the
+        cycle-to-date TOTAL usage (kWh consumed so far this billing cycle),
+        not a per-day rate. Confirmed by observation: with currentDays=3,
+        a genuine per-day figure would be implausibly low for a household;
+        as a 3-day cycle total it lines up. "costPerDay" by contrast is a
+        genuine average daily cost for the cycle. Sensors/consumers should
+        treat unitsPerDay as "cycle usage total", not "average daily usage".
+
+        IMPORTANT - "currentDays" also lags the usage/cost totals by
+        roughly one day: confirmed by observation that on currentDays=3
+        (today being the 3rd calendar day of the cycle), unitsPerDay/
+        currentCost only reflected 2 days of finalized meter data, not 3.
+        This mirrors the provisional-vs-finalized meter read timing seen
+        with other AU retailers - today's usage/cost typically isn't
+        included until the next poll once the portal finalizes the read.
+        Don't treat unitsPerDay / currentDays as "as of right now"; treat
+        them as "as of the most recently finalized meter day".
+
+        All numeric fields arrive as strings, some "$"-prefixed
+        (currentCost, projectedCost), and lastInvoiceAmount may be the
+        literal string "None" (not null) when no invoice has been raised
+        yet - use normalize_usage_summary() to coerce these safely.
+        lastInvoiceDate/nextInvoiceDate are "DD Mon" with no year, not the
+        .NET Date(...) format originally assumed.
         """
         return await self._request_json(
             "GET",
@@ -335,3 +446,27 @@ class CovauClient:
         return await self._request_json(
             "GET", "/wp-json/covau/v1/Customer/transactions"
         )
+
+    async def refresh_session(self) -> dict[str, Any] | None:
+        """Attempt a lightweight token refresh instead of a full re-login.
+
+        Endpoint confirmed to exist (seen in the portal's own frontend auth
+        script) but the exact response body hasn't been captured yet from a
+        real request/response pair - only inferred from how the page JS
+        consumes it: {"success": true, "accessTokenExpiresAt": ...,
+        "refreshTokenExpiresAt": ..., "rememberMe": ...}.
+
+        NOT yet wired into the coordinator's re-auth flow - the coordinator
+        still falls back to a full authenticate() on session expiry. Once
+        the real response shape is confirmed, this can be tried first as a
+        cheaper alternative.
+        """
+        try:
+            result = await self._raw_request_json(
+                "POST",
+                "/wp-json/covau/v1/security/refresh",
+                json_body={},
+            )
+        except aiohttp.ClientResponseError as err:
+            raise CovauApiError(f"CovaU token refresh failed: {err}") from err
+        return result if isinstance(result, dict) else None

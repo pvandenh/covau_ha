@@ -1,10 +1,10 @@
 {
   "domain": "covau_ha",
-  "name": "CovaU HA",
-  "codeowners": [],
+  "name": "CovaU Energy Dashboard",
+  "codeowners": ["@pvandenh"],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://www.myaccount.covau.com.au",
+  "documentation": "https://github.com/pvandenh/covau_ha",
   "integration_type": "service",
   "iot_class": "cloud_polling",
   "requirements": [],

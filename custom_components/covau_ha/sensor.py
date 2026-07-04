@@ -31,7 +31,7 @@ async def async_setup_entry(
     for seq_product_item_id in services:
         entities.extend(
             [
-                CovauUsagePerDaySensor(coordinator, entry, seq_product_item_id),
+                CovauCycleUsageTotalSensor(coordinator, entry, seq_product_item_id),
                 CovauCostPerDaySensor(coordinator, entry, seq_product_item_id),
                 CovauCurrentCycleCostSensor(coordinator, entry, seq_product_item_id),
                 CovauProjectedCycleCostSensor(coordinator, entry, seq_product_item_id),
@@ -40,6 +40,10 @@ async def async_setup_entry(
                 CovauDailyPeakUsageSensor(coordinator, entry, seq_product_item_id),
                 CovauDailyOffPeakUsageSensor(coordinator, entry, seq_product_item_id),
                 CovauDailyStandardFitSensor(coordinator, entry, seq_product_item_id),
+                CovauDailyPeakCostSensor(coordinator, entry, seq_product_item_id),
+                CovauDailyOffPeakCostSensor(coordinator, entry, seq_product_item_id),
+                CovauDailyStandardFitCreditSensor(coordinator, entry, seq_product_item_id),
+                CovauDailySupplyChargeCostSensor(coordinator, entry, seq_product_item_id),
             ]
         )
 
@@ -75,6 +79,10 @@ class CovauServiceSensorBase(CovauSensorBase):
     ) -> None:
         super().__init__(coordinator, entry)
         self._seq_product_item_id = seq_product_item_id
+        # NOTE: unique_id is built from self._key (not self._attr_translation_key).
+        # The period_* sensors below deliberately changed _key from the old
+        # daily_* naming, so those will show up as new entities and the old
+        # daily_* ones will go unavailable/orphaned - delete those manually.
         self._attr_unique_id = (
             f"{entry.entry_id}_{seq_product_item_id}_{self._key}"
         )
@@ -102,11 +110,22 @@ class CovauServiceSensorBase(CovauSensorBase):
         return super().available and bool(self._service)
 
 
-class CovauUsagePerDaySensor(CovauServiceSensorBase):
-    """Recent average daily usage."""
+class CovauCycleUsageTotalSensor(CovauServiceSensorBase):
+    """Total usage consumed so far in the current billing cycle.
 
-    _attr_translation_key = "usage_per_day"
-    _key = "usage_per_day"
+    CovaU's API field is misleadingly named "unitsPerDay" but is actually
+    a cycle-to-date total, not a per-day rate - confirmed by comparing it
+    against currentDays (e.g. 39.16 kWh at currentDays=3 is a plausible
+    3-day household total, not a plausible per-day figure).
+
+    This total also lags "currentDays" by roughly one day: on currentDays=3
+    the totals reflected only 2 finalized meter-read days, not 3. Treat
+    this value as "as of the most recently finalized meter day", not
+    "as of right now" - see days_behind_cycle_counter below.
+    """
+
+    _attr_translation_key = "cycle_usage_total"
+    _key = "cycle_usage_total"
 
     @property
     def native_value(self) -> float | None:
@@ -116,12 +135,23 @@ class CovauUsagePerDaySensor(CovauServiceSensorBase):
     def native_unit_of_measurement(self) -> str | None:
         return self._usage_summary.get("uomCode") or "kWh"
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            # CovaU's currentDays counts calendar days elapsed in the
+            # billing cycle (including today), but this usage total
+            # typically only covers finalized meter-read days, which lags
+            # currentDays by roughly one day. Not a guaranteed offset -
+            # just a documented observed quirk to watch for.
+            "billing_cycle_day_counter": self._usage_summary.get("currentDays"),
+        }
+
 
 class CovauCostPerDaySensor(CovauServiceSensorBase):
-    """Recent average daily cost."""
+    """Average daily cost for the current billing cycle."""
 
     _attr_translation_key = "cost_per_day"
-    _attr_native_unit_of_measurement = "AUD"
+    _attr_native_unit_of_measurement = "$"
     _key = "cost_per_day"
 
     @property
@@ -133,7 +163,7 @@ class CovauCurrentCycleCostSensor(CovauServiceSensorBase):
     """Cost accrued so far in the current billing cycle."""
 
     _attr_translation_key = "current_cycle_cost"
-    _attr_native_unit_of_measurement = "AUD"
+    _attr_native_unit_of_measurement = "$"
     _key = "current_cycle_cost"
 
     @property
@@ -145,7 +175,7 @@ class CovauProjectedCycleCostSensor(CovauServiceSensorBase):
     """Projected cost for the full current billing cycle."""
 
     _attr_translation_key = "projected_cycle_cost"
-    _attr_native_unit_of_measurement = "AUD"
+    _attr_native_unit_of_measurement = "$"
     _key = "projected_cycle_cost"
 
     @property
@@ -157,7 +187,7 @@ class CovauLastInvoiceAmountSensor(CovauServiceSensorBase):
     """Amount of the most recent invoice."""
 
     _attr_translation_key = "last_invoice_amount"
-    _attr_native_unit_of_measurement = "AUD"
+    _attr_native_unit_of_measurement = "$"
     _key = "last_invoice_amount"
 
     @property
@@ -168,29 +198,37 @@ class CovauLastInvoiceAmountSensor(CovauServiceSensorBase):
 class CovauBillingCycleDaySensor(CovauServiceSensorBase):
     """Day number within the current billing cycle (e.g. 12 of 30)."""
 
-    _attr_translation_key = "billing_cycle_day"
+    _attr_translation_key = "todays_billing_day"
     _key = "billing_cycle_day"
 
     @property
-    def native_value(self) -> float | None:
-        return self._usage_summary.get("currentDays")
+    def native_value(self) -> int | None:
+        value = self._usage_summary.get("currentDays")
+        if value is None:
+            return None
+        try:
+            return int(round(float(value)))
+        except (TypeError, ValueError):
+            return None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         return {
             "period_days": self._usage_summary.get("periodDays"),
+            # "DD Mon" with no year, as returned by the portal.
             "last_invoice_date": self._usage_summary.get("lastInvoiceDate"),
             "next_invoice_date": self._usage_summary.get("nextInvoiceDate"),
             "warning_message": self._usage_summary.get("warningMessage"),
+            "usage_message": self._usage_summary.get("usageMessage"),
         }
 
 
 class CovauDailyPeakUsageSensor(CovauServiceSensorBase):
-    """Total peak usage over the recent daily window."""
+    """Total peak usage over the current billing period."""
 
-    _attr_translation_key = "daily_peak_usage"
+    _attr_translation_key = "period_peak_usage"
     _attr_native_unit_of_measurement = "kWh"
-    _key = "daily_peak_usage"
+    _key = "period_peak_usage"
 
     @property
     def native_value(self) -> float | None:
@@ -198,11 +236,11 @@ class CovauDailyPeakUsageSensor(CovauServiceSensorBase):
 
 
 class CovauDailyOffPeakUsageSensor(CovauServiceSensorBase):
-    """Total off-peak usage over the recent daily window."""
+    """Total off-peak usage over the current billing period."""
 
-    _attr_translation_key = "daily_off_peak_usage"
+    _attr_translation_key = "period_off_peak_usage"
     _attr_native_unit_of_measurement = "kWh"
-    _key = "daily_off_peak_usage"
+    _key = "period_off_peak_usage"
 
     @property
     def native_value(self) -> float | None:
@@ -210,12 +248,63 @@ class CovauDailyOffPeakUsageSensor(CovauServiceSensorBase):
 
 
 class CovauDailyStandardFitSensor(CovauServiceSensorBase):
-    """Total standard feed-in (solar export) over the recent daily window."""
+    """Total standard feed-in (solar export) over the current billing period."""
 
-    _attr_translation_key = "daily_standard_fit"
+    _attr_translation_key = "period_standard_fit"
     _attr_native_unit_of_measurement = "kWh"
-    _key = "daily_standard_fit"
+    _key = "period_standard_fit"
 
     @property
     def native_value(self) -> float | None:
         return self._daily_totals.get("standard_fit")
+
+
+class CovauDailyPeakCostSensor(CovauServiceSensorBase):
+    """Total peak cost over the current billing period, from netAmount."""
+
+    _attr_translation_key = "period_peak_cost"
+    _attr_native_unit_of_measurement = "$"
+    _key = "period_peak_cost"
+
+    @property
+    def native_value(self) -> float | None:
+        return self._daily_totals.get("peak_cost")
+
+
+class CovauDailyOffPeakCostSensor(CovauServiceSensorBase):
+    """Total off-peak cost over the current billing period, from netAmount."""
+
+    _attr_translation_key = "period_off_peak_cost"
+    _attr_native_unit_of_measurement = "$"
+    _key = "period_off_peak_cost"
+
+    @property
+    def native_value(self) -> float | None:
+        return self._daily_totals.get("off_peak_cost")
+
+
+class CovauDailyStandardFitCreditSensor(CovauServiceSensorBase):
+    """Total solar export credit over the current billing period.
+
+    Naturally negative-or-zero, since a feed-in credit reduces the bill.
+    """
+
+    _attr_translation_key = "period_standard_fit_credit"
+    _attr_native_unit_of_measurement = "$"
+    _key = "period_standard_fit_credit"
+
+    @property
+    def native_value(self) -> float | None:
+        return self._daily_totals.get("standard_fit_credit")
+
+
+class CovauDailySupplyChargeCostSensor(CovauServiceSensorBase):
+    """Total supply charge cost over the current billing period."""
+
+    _attr_translation_key = "period_supply_charge_cost"
+    _attr_native_unit_of_measurement = "$"
+    _key = "period_supply_charge_cost"
+
+    @property
+    def native_value(self) -> float | None:
+        return self._daily_totals.get("supply_charge_cost")
