@@ -21,11 +21,11 @@
   },
   "entity": {
     "sensor": {
-      "usage_per_day": {
-        "name": "Recent Usage Per Day"
+      "cycle_usage_total": {
+        "name": "Current Cycle Usage"
       },
       "cost_per_day": {
-        "name": "Recent Cost Per Day"
+        "name": "Average Cost Per Day"
       },
       "current_cycle_cost": {
         "name": "Current Cycle Cost"
@@ -36,17 +36,29 @@
       "last_invoice_amount": {
         "name": "Last Invoice Amount"
       },
-      "billing_cycle_day": {
-        "name": "Billing Cycle Day"
+      "todays_billing_day": {
+        "name": "Todays Billing Day"
       },
-      "daily_peak_usage": {
-        "name": "Daily Peak Usage"
+      "period_peak_usage": {
+        "name": "Period Peak Usage"
       },
-      "daily_off_peak_usage": {
-        "name": "Daily Off-Peak Usage"
+      "period_off_peak_usage": {
+        "name": "Period Off-Peak Usage"
       },
-      "daily_standard_fit": {
-        "name": "Daily Standard FiT"
+      "period_standard_fit": {
+        "name": "Period Standard FiT"
+      },
+      "period_peak_cost": {
+        "name": "Period Peak Cost"
+      },
+      "period_off_peak_cost": {
+        "name": "Period Off-Peak Cost"
+      },
+      "period_standard_fit_credit": {
+        "name": "Period Standard FiT Credit"
+      },
+      "period_supply_charge_cost": {
+        "name": "Period Supply Charge Cost"
       }
     }
   }
