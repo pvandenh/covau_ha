@@ -30,43 +30,6 @@ The **Todays Billing Day** sensor also exposes `period_days`, `last_invoice_date
 
 The **Current Cycle Usage** sensor also exposes `billing_cycle_day_counter` as an extra attribute — see [Known limitations](#known-limitations) for why this can lag the usage total by roughly a day.
 
-> **Note on the "Period ..." sensors:** these were previously named "Daily ..." (e.g. "Daily Peak Usage"), which was misleading since the values are billing-cycle-to-date totals, not daily figures. If you're upgrading from an earlier version, the old `daily_*` entities will go unavailable after this change and can be deleted from **Settings → Devices & Services → Entities** — the new `period_*` entities are separate, freshly-created ones (different `unique_id`), not renames of the old ones.
-
-## Installation
-
-### Manual
-
-1. Copy the `covau_ha` folder into your Home Assistant `custom_components` directory:
-   ```
-   custom_components/covau_ha/
-   ```
-2. Restart Home Assistant.
-
-### HACS (custom repository)
-
-1. In HACS, add this repository as a custom integration repository.
-2. Search for "CovaU HA" and install.
-3. Restart Home Assistant.
-
-## Configuration
-
-Configuration is done entirely through the Home Assistant UI:
-
-1. Go to **Settings → Devices & Services → Add Integration**.
-2. Search for **CovaU HA**.
-3. Enter your CovaU customer portal **account number** and **password** (the same credentials you use at [myaccount.covau.com.au](https://www.myaccount.covau.com.au)).
-
-If you have multiple services/sites on your account, sensors will be created for each one automatically.
-
-## How it works
-
-The integration authenticates against the CovaU portal's `/wp-json/covau/v1/login` endpoint, which sets session cookies used for all subsequent requests — there's no API key or bearer token involved. A `DataUpdateCoordinator` polls the portal every 30 minutes, re-authenticating automatically if the session has expired.
-
-For each discovered service, the integration fetches:
-- Current tariff/rate details
-- Billing-cycle usage and cost summary
-- Recent daily usage readings, broken down by rate category (Peak / Off-Peak / Standard Feed-in), summed into billing-period totals
-
 ## Known limitations
 
 - The CovaU login response body and a few endpoints (`customer/billing`, `Customer/transactions`) haven't been fully mapped yet — they're wired up but not yet surfaced as sensors.
@@ -82,6 +45,3 @@ Sensitive fields (login credentials, session cookies, and customer PII such as n
 
 This is an unofficial, community-built integration and is not affiliated with or endorsed by CovaU. Use at your own risk.
 
-## License
-
-MIT
