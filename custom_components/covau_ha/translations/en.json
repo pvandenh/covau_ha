@@ -1,0 +1,53 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "CovaU HA",
+        "description": "Enter your CovaU customer portal account number and password.",
+        "data": {
+          "account_no": "Account Number",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to CovaU",
+      "invalid_auth": "Invalid CovaU account number or password",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "This CovaU account is already configured"
+    }
+  },
+  "entity": {
+    "sensor": {
+      "usage_per_day": {
+        "name": "Recent Usage Per Day"
+      },
+      "cost_per_day": {
+        "name": "Recent Cost Per Day"
+      },
+      "current_cycle_cost": {
+        "name": "Current Cycle Cost"
+      },
+      "projected_cycle_cost": {
+        "name": "Projected Cycle Cost"
+      },
+      "last_invoice_amount": {
+        "name": "Last Invoice Amount"
+      },
+      "billing_cycle_day": {
+        "name": "Billing Cycle Day"
+      },
+      "daily_peak_usage": {
+        "name": "Daily Peak Usage"
+      },
+      "daily_off_peak_usage": {
+        "name": "Daily Off-Peak Usage"
+      },
+      "daily_standard_fit": {
+        "name": "Daily Standard FiT"
+      }
+    }
+  }
+}
