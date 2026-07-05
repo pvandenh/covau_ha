@@ -64,7 +64,7 @@ class CovauSensorBase(CoordinatorEntity[CovauCoordinator], SensorEntity):
         return DeviceInfo(
             identifiers={(DOMAIN, self._entry.entry_id)},
             name=self._entry.title,
-            manufacturer="CovaU",
+            manufacturer="community build effort",
         )
 
 
