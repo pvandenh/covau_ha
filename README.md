@@ -30,6 +30,21 @@ The **Todays Billing Day** sensor also exposes `period_days`, `last_invoice_date
 
 The **Current Cycle Usage** sensor also exposes `billing_cycle_day_counter` as an extra attribute — see [Known limitations](#known-limitations) for why this can lag the usage total by roughly a day.
 
+## Installation
+
+### HACS (recommended)
+
+1. Open HACS in your Home Assistant instance.
+2. Click **⋮ → Custom repositories**.
+3. Add `https://github.com/pvandenh/covau_ha` with category **Integration**.
+4. Search for **CovaU Energy Dashboard** and install it.
+5. Restart Home Assistant.
+6. Go to **Settings → Devices & Services → Add integration** and search for **CovaU**.
+
+### Manual
+
+Download the `covau_ha` folder from `custom_components/` and place it in your `<config>/custom_components/` directory, then restart Home Assistant.
+
 ## Known limitations
 
 - The CovaU login response body and a few endpoints (`customer/billing`, `Customer/transactions`) haven't been fully mapped yet — they're wired up but not yet surfaced as sensors.
